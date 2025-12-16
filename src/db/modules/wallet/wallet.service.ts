@@ -38,7 +38,7 @@ async function creditWallet(client: pg.PoolClient, userId: string, amount: numbe
             referenceId: ref.id,
             metadata: ref.metadata
         });
-        
+
         //update wallet balance
         await client.query('UPDATE wallets SET available_balance = available_balance + $1 WHERE user_id = $2', 
             [amount, userId]);
@@ -48,5 +48,7 @@ async function creditWallet(client: pg.PoolClient, userId: string, amount: numbe
         throw error;
     }
 }
+
+
 
 export = { getWalletBalance, creditWallet };

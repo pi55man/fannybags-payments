@@ -19,22 +19,10 @@ async function createLedgerEntry(client: pg.PoolClient, {
     metadata
 }: LedgerEntryParams): Promise<void> {
     await client.query(
-`CREATE TABLE ledger_entries (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-
-  debit_account TEXT NOT NULL,
-  credit_account TEXT NOT NULL,
-
-  amount BIGINT NOT NULL CHECK (amount > 0),
-  currency CHAR(3) NOT NULL DEFAULT 'INR',
-
-  reference_type TEXT NOT NULL,
-  reference_id UUID NOT NULL,
-
-  metadata JSONB,
-
-  created_at TIMESTAMP NOT NULL DEFAULT now()
-);
-`)
+        `INSERT INTO ledger_entries 
+        (debit_account, credit_account, amount, reference_type, reference_id, metadata, created_at) 
+        VALUES ($1, $2, $3, $4, $5, $6, NOW())`,
+        [debit, credit, amount.toNumber(), referenceType, referenceId, metadata]
+    );
 }
 export = { createLedgerEntry };
