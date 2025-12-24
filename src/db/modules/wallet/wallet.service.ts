@@ -1,6 +1,9 @@
 import nodeDomain = require("node:domain");
 import pg = require("pg");
-// import { createLedgerEntry } = require("../ledger/ledger.service");
+import fastify = require("fastify");
+import ledgerService = require("../ledger/ledger.service");
+import Decimal = require("decimal.js");
+import escrowService = require("../escrow/escrow.service");
 
 const {createLedgerEntry} = require("../ledger/ledger.service");
 
@@ -11,6 +14,7 @@ const pool = new pg.Pool({
     port: 5432,
     database: 'fannybags-payments'
 });
+
 
 async function getWalletBalance(userId: string): Promise<number> {
     const client = await pool.connect();
@@ -29,17 +33,6 @@ async function creditWallet(client: pg.PoolClient, userId: string, amount: numbe
     try {
         await client.query('BEGIN');
 
-        //ledger entry
-        createLedgerEntry (client, {
-            debit: null,
-            credit: userId,
-            amount: amount,
-            referenceType: ref.type,
-            referenceId: ref.id,
-            metadata: ref.metadata
-        });
-
-        //update wallet balance
         await client.query('UPDATE wallets SET available_balance = available_balance + $1 WHERE user_id = $2', 
             [amount, userId]);
         await client.query('COMMIT');
@@ -49,6 +42,33 @@ async function creditWallet(client: pg.PoolClient, userId: string, amount: numbe
     }
 }
 
+async function walletToEscrow(client: pg.PoolClient, userId: string, amount: number, escrowId: string,  ref: any): Promise<void> {
+    try {
+        await client.query('BEGIN');
+        await ledgerService.createLedgerEntry(client, {
+            debit: "wallet:"+userId,
+            credit: "escrow:"+escrowId,
+            amount: amount,
+            referenceType:ref.type,
+            referenceId:ref.id,
+            metadata: {},
+    });
+        const wallet = await client.query('UPDATE wallets SET available_balance = available_balance - $1 WHERE user_id = $2 AND available_balance >= $1', [amount, userId]);
+        if (wallet.rowCount !== 1) {
+            throw new Error('0 or multiple rows affected');
+        }
+        await escrowService.incrementEscrowAmount(client, escrowId, amount);
 
+        // const escrow = await client.query(`UPDATE escrows SET amount = amount + $1 WHERE id = $2 AND state IN ('PENDING','LOCKED')`, [amount, escrowId]);
+        // if (escrow.rowCount !== 1) {
+        //     throw new Error('0 or multiple rows affected');
+        // }
 
-export = { getWalletBalance, creditWallet };
+        await client.query('COMMIT');
+    } catch (error) {
+        await client.query('ROLLBACK');
+        throw error;
+    }
+}
+
+export = { getWalletBalance, creditWallet, walletToEscrow };
