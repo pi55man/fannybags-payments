@@ -1,40 +1,38 @@
-import nodeDomain = require("node:domain");
 import pg = require("pg");
-import fastify = require("fastify");
 import ledgerService = require("../ledger/ledger.service");
-import Decimal = require("decimal.js");
 import escrowService = require("../escrow/escrow.service");
 
-const {createLedgerEntry} = require("../ledger/ledger.service");
 
-const pool = new pg.Pool({
-    user: 'postgres',
-    password: 'peer',
-    host: 'localhost',
-    port: 5432,
-    database: 'fannybags-payments'
-});
-
-
-async function getWalletBalance(userId: string): Promise<number> {
-    const client = await pool.connect();
-    try {
-        const res = await client.query('SELECT available_balance FROM wallets WHERE user_id = $1', [userId]);
-        if (res.rows.length > 0) {
-            return res.rows[0].balance;
-        } else {
-            throw new Error('Wallet not found');
-        }
-    } finally {
-        client.release();
+async function getWalletBalance(client: pg.PoolClient, userId: string): Promise<number> {
+    const res = await client.query('SELECT available_balance FROM wallets WHERE user_id = $1', [userId]);
+    if (res.rows.length > 0) {
+        return res.rows[0].available_balance;
+    } else {
+        throw new Error('WALLET_NOT_FOUND');
     }
 }
-async function creditWallet(client: pg.PoolClient, userId: string, amount: number, ref: any): Promise<void> {
-    try {
-        await client.query('BEGIN');
+async function creditWalletNoTx(client: pg.PoolClient, userId: string, amount: number, ref: any): Promise<void> {
+    await ledgerService.createLedgerEntry(client, {
+        debit: "system:topup",
+        credit: "wallet:" + userId,
+        amount: amount,
+        referenceType: ref.type,
+        referenceId: ref.id,
+        metadata: {},
+    });
+    const { rowCount } = await client.query(
+        'UPDATE wallets SET available_balance = available_balance + $1 WHERE user_id = $2',
+        [amount, userId]
+    );
+    if (rowCount !== 1) {
+        throw new Error('WALLET_CREDIT_FAILED');
+    }
+}
 
-        await client.query('UPDATE wallets SET available_balance = available_balance + $1 WHERE user_id = $2', 
-            [amount, userId]);
+async function creditWallet(client: pg.PoolClient, userId: string, amount: number, ref: any): Promise<void> {
+    await client.query('BEGIN');
+    try {
+        await creditWalletNoTx(client, userId, amount, ref);
         await client.query('COMMIT');
     } catch (error) {
         await client.query('ROLLBACK');
@@ -45,25 +43,7 @@ async function creditWallet(client: pg.PoolClient, userId: string, amount: numbe
 async function walletToEscrow(client: pg.PoolClient, userId: string, amount: number, escrowId: string,  ref: any): Promise<void> {
     try {
         await client.query('BEGIN');
-        await ledgerService.createLedgerEntry(client, {
-            debit: "wallet:"+userId,
-            credit: "escrow:"+escrowId,
-            amount: amount,
-            referenceType:ref.type,
-            referenceId:ref.id,
-            metadata: {},
-    });
-        const wallet = await client.query('UPDATE wallets SET available_balance = available_balance - $1 WHERE user_id = $2 AND available_balance >= $1', [amount, userId]);
-        if (wallet.rowCount !== 1) {
-            throw new Error('0 or multiple rows affected');
-        }
-        await escrowService.incrementEscrowAmount(client, escrowId, amount);
-
-        // const escrow = await client.query(`UPDATE escrows SET amount = amount + $1 WHERE id = $2 AND state IN ('PENDING','LOCKED')`, [amount, escrowId]);
-        // if (escrow.rowCount !== 1) {
-        //     throw new Error('0 or multiple rows affected');
-        // }
-
+        await walletToEscrowNoTx(client, userId, amount, escrowId, ref);
         await client.query('COMMIT');
     } catch (error) {
         await client.query('ROLLBACK');
@@ -71,4 +51,52 @@ async function walletToEscrow(client: pg.PoolClient, userId: string, amount: num
     }
 }
 
-export = { getWalletBalance, creditWallet, walletToEscrow };
+async function walletToEscrowNoTx(client: pg.PoolClient, userId: string, amount: number, escrowId: string, ref: any): Promise<void> {
+    await ledgerService.createLedgerEntry(client, {
+        debit: "wallet:"+userId,
+        credit: "escrow:"+escrowId,
+        amount: amount,
+        referenceType: ref.type,
+        referenceId: ref.id,
+        metadata: {},
+    });
+    const wallet = await client.query(
+        'UPDATE wallets SET available_balance = available_balance - $1 WHERE user_id = $2 AND available_balance >= $1',
+        [amount, userId]
+    );
+    if (wallet.rowCount !== 1) {
+        throw new Error('INSUFFICIENT_WALLET_BALANCE');
+    }
+    await escrowService.incrementEscrowAmount(client, escrowId, amount);
+}
+
+async function escrowToWalletNoTx(client: pg.PoolClient, userId: string, amount: number, escrowId: string, ref: any): Promise<void> {
+    await ledgerService.createLedgerEntry(client, {
+        debit: "escrow:"+escrowId,
+        credit: "wallet:"+userId,
+        amount: amount,
+        referenceType: ref.type,
+        referenceId: ref.id,
+        metadata: {},
+    });
+    await escrowService.decrementEscrowAmount(client, escrowId, amount);
+    const { rowCount } = await client.query(
+        'UPDATE wallets SET available_balance = available_balance + $1 WHERE user_id = $2',
+        [amount, userId]
+    );
+    if (rowCount !== 1) {
+        throw new Error('WALLET_CREDIT_FAILED');
+    }
+}
+
+async function escrowToWallet(client: pg.PoolClient, userId: string, amount: number, escrowId: string,  ref: any): Promise<void> {
+    try {
+        await client.query('BEGIN');
+        await escrowToWalletNoTx(client, userId, amount, escrowId, ref);
+        await client.query('COMMIT');
+    } catch (error) {
+        await client.query('ROLLBACK');
+        throw error;
+    }
+}
+export = { getWalletBalance, creditWallet, creditWalletNoTx, walletToEscrow, walletToEscrowNoTx, escrowToWalletNoTx };

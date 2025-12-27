@@ -1,5 +1,4 @@
 import pg = require("pg");
-import decimal = require("decimal.js");
 
 interface LedgerEntryParams {
     debit: string | null; //account losing money

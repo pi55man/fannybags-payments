@@ -1,25 +1,39 @@
 import fastify = require('fastify');
-const {getWalletBalance, creditWallet} = require('./db/modules/wallet/wallet.service');
+import pool = require('./db/pool');
+import apiRoutes = require('./routes/api');
+import webhookRoutes = require('./routes/webhooks');
+import campaignService = require('./db/modules/campaigns/campaign.service');
 
-const server = fastify()
+const server = fastify({
+    logger: true,
+});
 
-server.get('/payments/health', async (req: any, res: any) => {
-    return { status: 'ok' }
-})
+server.register(apiRoutes);
+server.register(webhookRoutes);
 
-server.get('/wallet/:userId', async (req:any, res: any) => {
-    const balance = await getWalletBalance(req.params.userId);
-    return { balance }
-})
+server.get('/health', async (req: any, res: any) => {
+    return { status: 'ok' };
+});
 
-server.post('/payments/wallet/deposit', async (req: any, res: any) => {
-    // Logic to deposit amount into wallet
-})
-
-server.listen({port: 8080}, (err, address) => {
-    if (err) {
-        console.error(err)
-        process.exit(1)
+// deadline worker - run periodically via cron or scheduler
+async function runDeadlineWorker() {
+    try {
+        await campaignService.deadlineWorker(pool);
+        console.log('deadline worker completed');
+    } catch (error) {
+        console.error('deadline worker failed:', error);
     }
-    console.log(`Server listening at ${address}`)
-})
+}
+
+// run worker every 5 minutes
+setInterval(runDeadlineWorker, 5 * 60 * 1000);
+
+server.listen({ port: parseInt(process.env.PORT || '8080', 10), host: '0.0.0.0' }, (err, address) => {
+    if (err) {
+        console.error(err);
+        process.exit(1);
+    }
+    console.log(`server listening at ${address}`);
+    // run worker on startup
+    runDeadlineWorker();
+});

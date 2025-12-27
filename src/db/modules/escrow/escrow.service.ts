@@ -6,10 +6,7 @@ RELEASED:	Paid out
 SETTLED:	Closed
 
 */
-import type typeProvider = require("fastify/types/type-provider");
-import nodeHttp = require("node:http");
 import pg = require("pg");
-import es = require("zod/v4/locales/es.js");
 
 async function createEscrow(
   client: pg.PoolClient,
@@ -138,4 +135,48 @@ async function markEscrowReleased(
     throw new Error("ESCROW_CANNOT_SETTLE");
   }
 }
-export = {incrementEscrowAmount}
+
+async function decrementEscrowAmount(
+  client: pg.PoolClient,
+  escrowId: string,
+  amount: number
+) {
+  const { rowCount } = await client.query(
+    `
+    UPDATE escrows
+    SET amount = amount - $1,
+        updated_at = now()
+    WHERE id = $2
+      AND state IN ('PENDING', 'LOCKED')
+      AND amount >= $1
+    `,
+    [amount, escrowId]
+  );
+
+  if (rowCount === 0) {
+    throw new Error("ESCROW_NOT_ACCEPTING_FUNDS");
+  }
+}
+
+async function settleEscrowAfterRefund(
+  client: pg.PoolClient,
+  escrowId: string
+) {
+  const { rowCount } = await client.query(
+    `
+    UPDATE escrows
+    SET state = 'SETTLED',
+        updated_at = now()
+    WHERE id = $1
+      AND state = 'PENDING'
+      AND amount = 0
+    `,
+    [escrowId]
+  );
+
+  if (rowCount !== 1) {
+    throw new Error("ESCROW_REFUND_SETTLE_FAILED");
+  }
+}
+
+export = {incrementEscrowAmount, decrementEscrowAmount, createEscrow, lockEscrow, EscrowReleasable, markEscrowReleased, settleEscrow, settleEscrowAfterRefund};
