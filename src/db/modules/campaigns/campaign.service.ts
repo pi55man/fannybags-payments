@@ -3,6 +3,7 @@ import decimal = require('decimal.js');
 import ledgerService = require('../ledger/ledger.service');
 import walletService = require('../wallet/wallet.service');
 import escrowService = require('../escrow/escrow.service');
+import slicesService = require('../slices/slices.service');
 import nodeCrypto = require('node:crypto');
 
 async function createCampaign(
@@ -13,6 +14,7 @@ async function createCampaign(
         min_goal: number;
         artist_id: string;
         deadline: Date;
+        slicePercentCap?: number;
     }) {
         await client.query('BEGIN');
         try{
@@ -27,6 +29,10 @@ async function createCampaign(
     );
     const escrow = await escrowService.createEscrow(client, {purpose: "campaign", purposeId: campaignId});
     await client.query(`UPDATE campaigns SET escrow_id = $1 WHERE id = $2`, [escrow.id, campaignId]);
+    
+    if (params.slicePercentCap && params.slicePercentCap > 0) {
+        await slicesService.createCampaignSlices(client, campaignId, params.slicePercentCap);
+    }
     await client.query('COMMIT');
     return rows[0];
 } catch (error) {
@@ -93,29 +99,44 @@ async function payCampaignNoTx(client: pg.PoolClient, campaignId: string, userId
     if (!Number.isSafeInteger(amount) || amount <= 0) {
         throw new Error('INVALID_AMOUNT');
     }
-    const res = await client.query('SELECT escrow_id FROM campaigns WHERE id = $1', [campaignId]);
+    const res = await client.query('SELECT escrow_id, status FROM campaigns WHERE id = $1', [campaignId]);
     if (res.rows.length === 0) {
         throw new Error('CAMPAIGN_NOT_FOUND');
+    }
+    if (res.rows[0].status !== 'LIVE') {
+        throw new Error('CAMPAIGN_NOT_LIVE');
     }
     const escrow_id = res.rows[0].escrow_id;
 
     await walletService.walletToEscrowNoTx(client, userId, amount, escrow_id, { type: "campaign", id: campaignId });
 
+    const contributionId = nodeCrypto.randomUUID();
     const { rowCount } = await client.query(
         `
         INSERT INTO campaign_contributions (
+            id,
             campaign_id,
             contributor_id,
             amount,
             status
         )
-        VALUES ($1, $2, $3, 'PENDING')
+        VALUES ($1, $2, $3, $4, 'PENDING')
         `,
-        [campaignId, userId, amount]
+        [contributionId, campaignId, userId, amount]
     );
 
     if (rowCount !== 1) {
         throw new Error('CONTRIBUTION_INSERT_FAILED');
+    }
+
+    const slicesExist = await slicesService.getCampaignSlices(client, campaignId);
+    if (slicesExist) {
+        await slicesService.recordSlicePurchaseNoTx(client, {
+            campaignId: campaignId,
+            userId: userId,
+            contributionId: contributionId,
+            amountPaid: amount
+        });
     }
 }
 

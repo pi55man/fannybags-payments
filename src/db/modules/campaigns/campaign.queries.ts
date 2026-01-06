@@ -65,9 +65,12 @@ async function getCampaignById(client: pg.PoolClient, campaignId: string): Promi
             c.created_at,
             c.updated_at,
             e.amount AS funded_amount,
-            e.state AS escrow_state
+            e.state AS escrow_state,
+            cs.total_percent_cap,
+            cs.allocated_percent
         FROM campaigns c
         LEFT JOIN escrows e ON c.escrow_id = e.id
+        LEFT JOIN campaign_slices cs ON cs.campaign_id = c.id
         WHERE c.id = $1
         `,
         [campaignId]

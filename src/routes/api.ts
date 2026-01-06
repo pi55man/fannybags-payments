@@ -5,6 +5,9 @@ import campaignService = require('../db/modules/campaigns/campaign.service');
 import campaignQueries = require('../db/modules/campaigns/campaign.queries');
 import paymentService = require('../db/modules/payments/payment.service');
 import walletService = require('../db/modules/wallet/wallet.service');
+import slicesQueries = require('../db/modules/slices/slices.queries');
+import royaltyService = require('../db/modules/royalties/royalty.service');
+import royaltyQueries = require('../db/modules/royalties/royalty.queries');
 
 async function routes(server: fastify.FastifyInstance) {
 
@@ -81,6 +84,7 @@ async function routes(server: fastify.FastifyInstance) {
                 min_goal: req.body.min_goal,
                 artist_id: req.body.artist_id,
                 deadline: new Date(req.body.deadline),
+                slicePercentCap: req.body.slice_percent_cap,
             });
             res.status(201);
             return { campaign };
@@ -252,6 +256,127 @@ async function routes(server: fastify.FastifyInstance) {
         }
 
         return { verified: true };
+    });
+
+    // get campaign slice stats (public)
+    server.get('/campaigns/:id/slices', async (req: any, res) => {
+        const client = await pool.connect();
+        try {
+            const stats = await slicesQueries.getCampaignSliceStats(client, req.params.id);
+            if (!stats) {
+                res.status(404);
+                return { error: 'SLICES_NOT_FOUND' };
+            }
+            return { slices: stats };
+        } finally {
+            client.release();
+        }
+    });
+
+    // get user portfolio (authenticated)
+    server.get('/users/:userId/portfolio', async (req: any, res) => {
+        const client = await pool.connect();
+        try {
+            const portfolio = await slicesQueries.getUserPortfolio(client, req.params.userId);
+            return { portfolio };
+        } finally {
+            client.release();
+        }
+    });
+
+    // get user slice purchases (authenticated)
+    server.get('/users/:userId/slices', async (req: any, res) => {
+        const client = await pool.connect();
+        try {
+            const params: any = {};
+            if (req.query.limit) params.limit = parseInt(req.query.limit, 10);
+            if (req.query.offset) params.offset = parseInt(req.query.offset, 10);
+            
+            const slices = await slicesQueries.getSlicePurchasesByUser(client, req.params.userId, params);
+            return { slices };
+        } finally {
+            client.release();
+        }
+    });
+
+    // get user royalty history (authenticated)
+    server.get('/users/:userId/royalties', async (req: any, res) => {
+        const client = await pool.connect();
+        try {
+            const params: any = {};
+            if (req.query.limit) params.limit = parseInt(req.query.limit, 10);
+            if (req.query.offset) params.offset = parseInt(req.query.offset, 10);
+            
+            const royalties = await royaltyQueries.getUserRoyaltyHistory(client, req.params.userId, params);
+            const total = await royaltyQueries.getUserTotalRoyalties(client, req.params.userId);
+            return { royalties, total };
+        } finally {
+            client.release();
+        }
+    });
+
+    // admin: create royalty report
+    server.post('/admin/campaigns/:id/royalty-report', async (req: any, res) => {
+        const client = await pool.connect();
+        try {
+            const report = await royaltyService.createRoyaltyReport(
+                client,
+                req.params.id,
+                req.body.total_revenue
+            );
+            res.status(201);
+            return { report };
+        } catch (error: any) {
+            res.status(400);
+            return { error: error.message };
+        } finally {
+            client.release();
+        }
+    });
+
+    // admin: get royalty reports for campaign
+    server.get('/admin/campaigns/:id/royalty-reports', async (req: any, res) => {
+        const client = await pool.connect();
+        try {
+            const params: any = {};
+            if (req.query.limit) params.limit = parseInt(req.query.limit, 10);
+            if (req.query.offset) params.offset = parseInt(req.query.offset, 10);
+            
+            const reports = await royaltyQueries.getRoyaltyReports(client, req.params.id, params);
+            return { reports };
+        } finally {
+            client.release();
+        }
+    });
+
+    // admin: get royalty report details
+    server.get('/admin/royalty-reports/:id', async (req: any, res) => {
+        const client = await pool.connect();
+        try {
+            const report = await royaltyQueries.getRoyaltyReportById(client, req.params.id);
+            if (!report) {
+                res.status(404);
+                return { error: 'REPORT_NOT_FOUND' };
+            }
+            const payouts = await royaltyQueries.getPayoutsForReport(client, req.params.id);
+            return { report, payouts };
+        } finally {
+            client.release();
+        }
+    });
+
+    // admin: process royalty payouts
+    server.post('/admin/royalty-reports/:id/payout', async (req: any, res) => {
+        const client = await pool.connect();
+        try {
+            await royaltyService.payoutRoyalties(client, req.params.id);
+            return { success: true };
+        } catch (error: any) {
+            res.status(400);
+            return { error: error.message };
+        } finally {
+            client.release();
+        }
     });
 }
 

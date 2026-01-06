@@ -99,4 +99,4 @@ async function escrowToWallet(client: pg.PoolClient, userId: string, amount: num
         throw error;
     }
 }
-export = { getWalletBalance, creditWallet, creditWalletNoTx, walletToEscrow, walletToEscrowNoTx, escrowToWalletNoTx };
+export = { getWalletBalance, creditWallet, creditWalletNoTx, walletToEscrow, walletToEscrowNoTx, escrowToWallet, escrowToWalletNoTx };
