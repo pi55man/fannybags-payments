@@ -29,27 +29,6 @@ async function creditWalletNoTx(client: pg.PoolClient, userId: string, amount: n
     }
 }
 
-async function creditWallet(client: pg.PoolClient, userId: string, amount: number, ref: any): Promise<void> {
-    await client.query('BEGIN');
-    try {
-        await creditWalletNoTx(client, userId, amount, ref);
-        await client.query('COMMIT');
-    } catch (error) {
-        await client.query('ROLLBACK');
-        throw error;
-    }
-}
-
-async function walletToEscrow(client: pg.PoolClient, userId: string, amount: number, escrowId: string,  ref: any): Promise<void> {
-    try {
-        await client.query('BEGIN');
-        await walletToEscrowNoTx(client, userId, amount, escrowId, ref);
-        await client.query('COMMIT');
-    } catch (error) {
-        await client.query('ROLLBACK');
-        throw error;
-    }
-}
 
 async function walletToEscrowNoTx(client: pg.PoolClient, userId: string, amount: number, escrowId: string, ref: any): Promise<void> {
     await ledgerService.createLedgerEntry(client, {
@@ -89,14 +68,4 @@ async function escrowToWalletNoTx(client: pg.PoolClient, userId: string, amount:
     }
 }
 
-async function escrowToWallet(client: pg.PoolClient, userId: string, amount: number, escrowId: string,  ref: any): Promise<void> {
-    try {
-        await client.query('BEGIN');
-        await escrowToWalletNoTx(client, userId, amount, escrowId, ref);
-        await client.query('COMMIT');
-    } catch (error) {
-        await client.query('ROLLBACK');
-        throw error;
-    }
-}
-export = { getWalletBalance, creditWallet, creditWalletNoTx, walletToEscrow, walletToEscrowNoTx, escrowToWallet, escrowToWalletNoTx };
+export = { getWalletBalance, creditWalletNoTx, walletToEscrowNoTx, escrowToWalletNoTx };

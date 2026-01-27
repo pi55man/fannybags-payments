@@ -1,14 +1,13 @@
-import pg = require("pg");
+import supabase = require('@supabase/supabase-js');
 
-const pool = new pg.Pool({
-    connectionString: process.env.DATABASE_URL,
-    max: 20,
-    idleTimeoutMillis: 30000,
-    connectionTimeoutMillis: 2000,
+const supabaseUrl = process.env.SUPABASE_URL!;
+const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
+
+const client = supabase.createClient(supabaseUrl, supabaseServiceKey, {
+    auth: {
+        autoRefreshToken: false,
+        persistSession: false
+    }
 });
 
-pool.on('error', (err) => {
-    console.error('unexpected error on idle client', err);
-});
-
-export = pool;
+export = client;

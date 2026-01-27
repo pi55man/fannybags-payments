@@ -96,9 +96,36 @@ async function getCampaignSliceStats(client: pg.PoolClient, campaignId: string):
     return rows[0];
 }
 
+async function getUserCampaignOwnership(
+    client: pg.PoolClient,
+    userId: string,
+    campaignId: string
+): Promise<any | null> {
+    const { rows } = await client.query(
+        `
+        SELECT 
+            sp.campaign_id,
+            c.title as campaign_title,
+            c.status as campaign_status,
+            c.min_goal as goal_amount,
+            SUM(sp.percent_owned) as total_percent_owned,
+            SUM(sp.amount_paid) as total_invested,
+            COUNT(sp.id) as contribution_count
+        FROM slice_purchases sp
+        JOIN campaigns c ON c.id = sp.campaign_id
+        WHERE sp.user_id = $1 AND sp.campaign_id = $2
+        GROUP BY sp.campaign_id, c.title, c.status, c.min_goal
+        `,
+        [userId, campaignId]
+    );
+
+    return rows.length > 0 ? rows[0] : null;
+}
+
 export = {
     getUserPortfolio,
     getCampaignSliceHolders,
     getSlicePurchasesByUser,
-    getCampaignSliceStats
+    getCampaignSliceStats,
+    getUserCampaignOwnership
 };

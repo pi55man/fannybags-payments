@@ -62,36 +62,20 @@ async function calculateSlicePercent(
     return Math.min(percentOfGoal, availablePercent);
 }
 
-async function recordSlicePurchaseNoTx(
+async function recordSlicePurchase(
     client: pg.PoolClient,
     params: {
         campaignId: string;
         userId: string;
         contributionId: string;
+        percentOwned: number;
         amountPaid: number;
     }
 ): Promise<any> {
-    const { campaignId, userId, contributionId, amountPaid } = params;
+    const { campaignId, userId, contributionId, percentOwned, amountPaid } = params;
 
-    const slicePercent = await calculateSlicePercent(client, campaignId, amountPaid);
-
-    if (slicePercent <= 0) {
+    if (percentOwned <= 0) {
         return null;
-    }
-
-    const updateRes = await client.query(
-        `
-        UPDATE campaign_slices
-        SET allocated_percent = allocated_percent + $1,
-            updated_at = now()
-        WHERE campaign_id = $2
-          AND allocated_percent + $1 <= total_percent_cap
-        `,
-        [slicePercent, campaignId]
-    );
-
-    if (updateRes.rowCount !== 1) {
-        throw new Error('SLICE_ALLOCATION_FAILED');
     }
 
     const { rows } = await client.query(
@@ -100,7 +84,7 @@ async function recordSlicePurchaseNoTx(
         VALUES ($1, $2, $3, $4, $5)
         RETURNING *
         `,
-        [campaignId, userId, contributionId, slicePercent, amountPaid]
+        [campaignId, userId, contributionId, percentOwned, amountPaid]
     );
 
     return rows[0];
@@ -127,6 +111,6 @@ export = {
     createCampaignSlices,
     getCampaignSlices,
     calculateSlicePercent,
-    recordSlicePurchaseNoTx,
+    recordSlicePurchase,
     getUserSlicesForCampaign
 };

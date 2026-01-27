@@ -1,6 +1,7 @@
 import fastify = require('fastify');
 import pg = require('pg');
-import pool = require('../db/pool');
+import pool = require('../db/pgpool');
+import supabaseClient = require('../db/pool');
 import campaignService = require('../db/modules/campaigns/campaign.service');
 import campaignQueries = require('../db/modules/campaigns/campaign.queries');
 import paymentService = require('../db/modules/payments/payment.service');
@@ -13,48 +14,64 @@ async function routes(server: fastify.FastifyInstance) {
 
     // get all campaigns (public)
     server.get('/campaigns', async (req: any, res) => {
-        const client = await pool.connect();
         try {
             const params: any = {};
             if (req.query.status) params.status = req.query.status;
-            if (req.query.artistId) params.artistId = req.query.artistId;
+            if (req.query.releaseId) params.releaseId = req.query.releaseId;
             if (req.query.limit) params.limit = parseInt(req.query.limit, 10);
             if (req.query.offset) params.offset = parseInt(req.query.offset, 10);
             
-            const campaigns = await campaignQueries.getCampaigns(client, params);
+            const campaigns = await campaignQueries.getCampaigns(supabaseClient, params);
             return { campaigns };
-        } finally {
-            client.release();
+        } catch (error: any) {
+            res.status(500);
+            return { error: error.message };
+        }
+    });
+
+    // get campaigns by artist (public)
+    server.get('/artists/:artistId/campaigns', async (req: any, res) => {
+        try {
+            const params: any = {};
+            if (req.query.status) params.status = req.query.status;
+            if (req.query.limit) params.limit = parseInt(req.query.limit, 10);
+            if (req.query.offset) params.offset = parseInt(req.query.offset, 10);
+            
+            const campaigns = await campaignQueries.getCampaignsByArtist(supabaseClient, req.params.artistId, params);
+            return { campaigns };
+        } catch (error: any) {
+            res.status(500);
+            return { error: error.message };
         }
     });
 
     // get campaign by id (public)
     server.get('/campaigns/:id', async (req: any, res) => {
-        const client = await pool.connect();
         try {
-            const campaign = await campaignQueries.getCampaignById(client, req.params.id);
+            const campaign = await campaignQueries.getCampaignById(supabaseClient, req.params.id);
             if (!campaign) {
                 res.status(404);
                 return { error: 'CAMPAIGN_NOT_FOUND' };
             }
             return { campaign };
-        } finally {
-            client.release();
+        } catch (error: any) {
+            res.status(500);
+            return { error: error.message };
         }
     });
 
-    // get campaign stats (public)
-    server.get('/campaigns/:id/stats', async (req: any, res) => {
-        const client = await pool.connect();
+    // get campaign with full details (public)
+    server.get('/campaigns/:id/details', async (req: any, res) => {
         try {
-            const stats = await campaignQueries.getCampaignStats(client, req.params.id);
-            if (!stats) {
+            const campaign = await campaignQueries.getCampaignWithDetails(supabaseClient, req.params.id);
+            if (!campaign) {
                 res.status(404);
                 return { error: 'CAMPAIGN_NOT_FOUND' };
             }
-            return { stats };
-        } finally {
-            client.release();
+            return { campaign };
+        } catch (error: any) {
+            res.status(500);
+            return { error: error.message };
         }
     });
 
@@ -76,37 +93,33 @@ async function routes(server: fastify.FastifyInstance) {
 
     // create campaign (artist only)
     server.post('/campaigns', async (req: any, res) => {
-        const client = await pool.connect();
         try {
-            const campaign = await campaignService.createCampaign(client, {
-                title: req.body.title,
-                description: req.body.description,
-                min_goal: req.body.min_goal,
-                artist_id: req.body.artist_id,
-                deadline: new Date(req.body.deadline),
-                slicePercentCap: req.body.slice_percent_cap,
+            const campaign = await campaignService.createCampaign(supabaseClient, {
+                release_id: req.body.release_id,
+                release_data: req.body.release_data,
+                goal_amount: req.body.goal_amount,
+                story: req.body.story,
+                creative_vision: req.body.creative_vision,
+                start_date: new Date(req.body.start_date),
+                end_date: new Date(req.body.end_date),
+                tracks: req.body.tracks || []
             });
             res.status(201);
             return { campaign };
         } catch (error: any) {
             res.status(400);
             return { error: error.message };
-        } finally {
-            client.release();
         }
     });
 
     // publish campaign (artist only)
     server.post('/campaigns/:id/publish', async (req: any, res) => {
-        const client = await pool.connect();
         try {
-            await campaignService.publishCampaign(client, req.params.id);
+            await campaignService.publishCampaign(supabaseClient, req.params.id);
             return { success: true };
         } catch (error: any) {
             res.status(400);
             return { error: error.message };
-        } finally {
-            client.release();
         }
     });
 
@@ -278,8 +291,7 @@ async function routes(server: fastify.FastifyInstance) {
         const client = await pool.connect();
         try {
             const portfolio = await slicesQueries.getUserPortfolio(client, req.params.userId);
-            return { portfolio };
-        } finally {
+            return { portfolio };        } finally {
             client.release();
         }
     });
@@ -294,6 +306,33 @@ async function routes(server: fastify.FastifyInstance) {
             
             const slices = await slicesQueries.getSlicePurchasesByUser(client, req.params.userId, params);
             return { slices };
+        } finally {
+            client.release();
+        }
+    });
+
+    // get user ownership in specific campaign (authenticated)
+    server.get('/campaigns/:id/ownership', async (req: any, res) => {
+        const campaignId = req.params.id;
+        const userId = req.query.userId;
+
+        if (!userId) {
+            res.status(400);
+            return { error: 'user_id required' };
+        }
+
+        const client = await pool.connect();
+        try {
+            const ownership = await slicesQueries.getUserCampaignOwnership(client, userId, campaignId);
+            if (!ownership) {
+                return {
+                    campaign_id: campaignId,
+                    total_percent_owned: 0,
+                    total_invested: 0,
+                    contribution_count: 0
+                };
+            }
+            return { ownership };
         } finally {
             client.release();
         }

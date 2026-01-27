@@ -1,86 +1,195 @@
 import pg = require('pg');
 
-async function getCampaigns(client: pg.PoolClient, params?: {
+type SupabaseClient = any;
+
+async function getCampaigns(supabase: SupabaseClient, params?: {
     status?: string;
-    artistId?: string;
+    releaseId?: string;
     limit?: number;
     offset?: number;
 }): Promise<any[]> {
-    const conditions: string[] = [];
-    const values: any[] = [];
-    let paramIndex = 1;
+    let query = supabase
+        .from('campaigns')
+        .select(`
+            *,
+            releases:release_id (
+                title,
+                primary_artist_id
+            )
+        `)
+        .order('created_at', { ascending: false });
 
     if (params?.status) {
-        conditions.push(`c.status = $${paramIndex}`);
-        values.push(params.status);
-        paramIndex++;
+        query = query.eq('status', params.status);
     }
 
-    if (params?.artistId) {
-        conditions.push(`c.artist_id = $${paramIndex}`);
-        values.push(params.artistId);
-        paramIndex++;
+    if (params?.releaseId) {
+        query = query.eq('release_id', params.releaseId);
     }
 
-    const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
     const limit = params?.limit || 50;
     const offset = params?.offset || 0;
 
-    const { rows } = await client.query(
-        `
-        SELECT 
-            c.id,
-            c.artist_id,
-            c.title,
-            c.description,
-            c.min_goal,
-            c.deadline,
-            c.status,
-            c.published_at,
-            c.created_at,
-            c.updated_at
-        FROM campaigns c
-        ${whereClause}
-        ORDER BY c.created_at DESC
-        LIMIT $${paramIndex} OFFSET $${paramIndex + 1}
-        `,
-        [...values, limit, offset]
-    );
+    query = query.range(offset, offset + limit - 1);
 
-    return rows;
+    const { data, error } = await query;
+
+    if (error) {
+        throw error;
+    }
+
+    return data || [];
 }
 
-async function getCampaignById(client: pg.PoolClient, campaignId: string): Promise<any | null> {
-    const { rows } = await client.query(
-        `
-        SELECT 
-            c.id,
-            c.artist_id,
-            c.title,
-            c.description,
-            c.min_goal,
-            c.deadline,
-            c.status,
-            c.published_at,
-            c.created_at,
-            c.updated_at,
-            e.amount AS funded_amount,
-            e.state AS escrow_state,
-            cs.total_percent_cap,
-            cs.allocated_percent
-        FROM campaigns c
-        LEFT JOIN escrows e ON c.escrow_id = e.id
-        LEFT JOIN campaign_slices cs ON cs.campaign_id = c.id
-        WHERE c.id = $1
-        `,
-        [campaignId]
-    );
+async function getCampaignsByArtist(supabase: SupabaseClient, artistId: string, params?: {
+    status?: string;
+    limit?: number;
+    offset?: number;
+}): Promise<any[]> {
+    // Get all releases by this artist
+    const { data: releases, error: releaseError } = await supabase
+        .from('releases')
+        .select('id')
+        .eq('primary_artist_id', artistId);
 
-    if (rows.length === 0) {
+    if (releaseError) {
+        throw releaseError;
+    }
+
+    if (!releases || releases.length === 0) {
+        return [];
+    }
+
+    const releaseIds = releases.map((r: any) => r.id);
+
+    // Get campaigns for these releases
+    let query = supabase
+        .from('campaigns')
+        .select(`
+            *,
+            releases:release_id (
+                title,
+                primary_artist_id,
+                primary_genre
+            )
+        `)
+        .in('release_id', releaseIds)
+        .order('created_at', { ascending: false });
+
+    if (params?.status) {
+        query = query.eq('status', params.status);
+    }
+
+    const limit = params?.limit || 50;
+    const offset = params?.offset || 0;
+
+    query = query.range(offset, offset + limit - 1);
+
+    const { data, error } = await query;
+
+    if (error) {
+        throw error;
+    }
+
+    return data || [];
+}
+
+async function getCampaignById(supabase: SupabaseClient, campaignId: string): Promise<any | null> {
+    const { data, error } = await supabase
+        .from('campaigns')
+        .select(`
+            *,
+            releases:release_id (
+                title,
+                primary_artist_id,
+                release_type,
+                primary_genre
+            )
+        `)
+        .eq('id', campaignId)
+        .single();
+
+    if (error) {
+        if (error.code === 'PGRST116') {
+            return null;
+        }
+        throw error;
+    }
+
+    return data;
+}
+
+async function getCampaignTracks(supabase: SupabaseClient, campaignId: string): Promise<any[]> {
+    const { data, error } = await supabase
+        .from('campaign_tracks')
+        .select(`
+            id,
+            track_id,
+            royalty_share_percent,
+            tracks:track_id (
+                track_title,
+                track_number,
+                duration_seconds,
+                isrc_code
+            )
+        `)
+        .eq('campaign_id', campaignId)
+        .order('tracks(track_number)', { ascending: true });
+
+    if (error) {
+        throw error;
+    }
+
+    return data || [];
+}
+
+async function getCampaignTrackBudgetItems(supabase: SupabaseClient, campaignTrackId: string): Promise<any[]> {
+    const { data, error } = await supabase
+        .from('campaign_track_budget_items')
+        .select('*')
+        .eq('campaign_track_id', campaignTrackId)
+        .order('created_at', { ascending: true });
+
+    if (error) {
+        throw error;
+    }
+
+    return data || [];
+}
+
+async function getTrackContributors(supabase: SupabaseClient, trackId: string): Promise<any[]> {
+    const { data, error } = await supabase
+        .from('track_contributors')
+        .select('*')
+        .eq('track_id', trackId)
+        .order('created_at', { ascending: true });
+
+    if (error) {
+        throw error;
+    }
+
+    return data || [];
+}
+
+async function getCampaignWithDetails(supabase: SupabaseClient, campaignId: string): Promise<any | null> {
+    const campaign = await getCampaignById(supabase, campaignId);
+    
+    if (!campaign) {
         return null;
     }
 
-    return rows[0];
+    // Get tracks
+    const tracks = await getCampaignTracks(supabase, campaignId);
+    
+    // Get budget items and contributors for each track
+    for (const track of tracks) {
+        track.budget_items = await getCampaignTrackBudgetItems(supabase, track.id);
+        track.contributors = await getTrackContributors(supabase, track.track_id);
+    }
+
+    campaign.tracks = tracks;
+    
+    return campaign;
 }
 
 async function getCampaignContributors(client: pg.PoolClient, campaignId: string): Promise<any[]> {
@@ -186,7 +295,12 @@ async function getCampaignStats(client: pg.PoolClient, campaignId: string): Prom
 
 export = {
     getCampaigns,
+    getCampaignsByArtist,
     getCampaignById,
+    getCampaignTracks,
+    getCampaignTrackBudgetItems,
+    getTrackContributors,
+    getCampaignWithDetails,
     getCampaignContributors,
     getUserContributions,
     getUserContributionTotal,
