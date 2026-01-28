@@ -18,7 +18,6 @@ interface BudgetItem {
 interface TrackContributor {
     name?: string;
     role: string;
-    royalty_split_percent?: number;
 }
 
 interface TrackData {
@@ -196,8 +195,7 @@ async function createCampaign(
                             id: nodeCrypto.randomUUID(),
                             track_id: trackId,
                             name: contributor.name,
-                            role: contributor.role,
-                            royalty_split_percent: contributor.royalty_split_percent
+                            role: contributor.role
                         }));
 
                         const { error: contributorsError } = await supabase
